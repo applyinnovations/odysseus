@@ -78,6 +78,7 @@ import bcrypt as _bcrypt
 
 from src.app_helpers import abs_join, serve_html_with_nonce
 from src.generated_images import GENERATED_IMAGE_HEADERS, resolve_generated_image_path
+from src.trusted_proxy_auth import TrustedProxyAuth, TrustedProxyAuthError
 from starlette.responses import RedirectResponse
 
 # ========= LOGGING =========
@@ -250,6 +251,10 @@ auth_manager = AuthManager()
 app.state.auth_manager = auth_manager
 AUTH_ENABLED = os.getenv("AUTH_ENABLED", "true").lower() != "false"
 LOCALHOST_BYPASS = os.getenv("LOCALHOST_BYPASS", "false").lower() == "true"
+trusted_proxy_auth = TrustedProxyAuth.from_env()
+app.state.trusted_proxy_auth = trusted_proxy_auth
+if trusted_proxy_auth.enabled and not AUTH_ENABLED:
+    raise RuntimeError("TRUSTED_PROXY_AUTH_ENABLED requires AUTH_ENABLED=true")
 if LOCALHOST_BYPASS:
     logger.warning("LOCALHOST_BYPASS is enabled, loopback requests bypass authentication. Do not expose this instance to a network.")
 
@@ -285,6 +290,13 @@ if AUTH_ENABLED:
         if path in AUTH_EXEMPT_EXACT:
             return True
         if any(path.startswith(p) for p in AUTH_EXEMPT_PREFIXES):
+            return True
+        return any(p.match(path) for p in AUTH_EXEMPT_PATTERNS)
+
+    _TRUSTED_PROXY_EXEMPT_EXACT = {"/api/health", "/api/version"}
+
+    def _is_trusted_proxy_exempt(path: str) -> bool:
+        if path in _TRUSTED_PROXY_EXEMPT_EXACT or path.startswith("/static"):
             return True
         return any(p.match(path) for p in AUTH_EXEMPT_PATTERNS)
 
@@ -365,8 +377,6 @@ if AUTH_ENABLED:
             # header; never a credentialed request).
             if is_cors_preflight(request.method, request.headers):
                 return await call_next(request)
-            if _is_auth_exempt(path):
-                return await call_next(request)
             # In-process internal-tool token bypass. Used by the agent
             # tool layer when it HTTP-loopbacks to admin-gated routes
             # (no admin cookie available in that context). Restricted to
@@ -389,6 +399,39 @@ if AUTH_ENABLED:
                     return await call_next(request)
             except Exception as _e:
                 logger.warning("Internal tool auth header check failed", exc_info=_e)
+
+            # Identity-aware proxy auth runs before the normal auth-exempt list
+            # so /api/auth/status receives an authenticated request state and
+            # the built-in setup/login endpoints cannot bypass the proxy mode.
+            # Health, static files, and token-in-path webhooks remain reachable
+            # without identity headers for probes/assets/external integrations.
+            if trusted_proxy_auth.enabled and not _is_trusted_proxy_exempt(path):
+                try:
+                    proxy_user = await trusted_proxy_auth.authenticate(request, auth_manager)
+                except TrustedProxyAuthError:
+                    if path.startswith("/api/"):
+                        return JSONResponse(
+                            status_code=401,
+                            content={"error": "Trusted proxy authentication required"},
+                        )
+                    return JSONResponse(
+                        status_code=401,
+                        content={"error": "Trusted proxy authentication required"},
+                    )
+                request.state.current_user = proxy_user
+                request.state.api_token = False
+                request.state.trusted_proxy_auth = True
+                if path == "/login":
+                    return RedirectResponse(url="/", status_code=302)
+                if path in {"/api/auth/setup", "/api/auth/signup", "/api/auth/login"}:
+                    return JSONResponse(
+                        status_code=403,
+                        content={"error": "Local authentication is disabled by trusted proxy auth"},
+                    )
+                return await call_next(request)
+
+            if _is_auth_exempt(path):
+                return await call_next(request)
             # Allow DIRECT localhost requests (internal service calls from
             # heartbeats etc.). Tunnel/proxy-forwarded requests are excluded by
             # _is_trusted_loopback so LOCALHOST_BYPASS can't be abused over a
@@ -469,7 +512,13 @@ if AUTH_ENABLED:
             return await call_next(request)
 
     app.add_middleware(AuthMiddleware)
-    logger.info("Auth middleware enabled (AUTH_ENABLED=true)")
+    if trusted_proxy_auth.enabled:
+        logger.info(
+            "Auth middleware enabled with trusted proxy identities from %s",
+            trusted_proxy_auth.identity_header,
+        )
+    else:
+        logger.info("Auth middleware enabled (AUTH_ENABLED=true)")
 else:
     logger.info("Auth middleware disabled (set AUTH_ENABLED=true to enable)")
 

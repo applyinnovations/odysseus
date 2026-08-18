@@ -174,7 +174,10 @@ def _resolve_tool_path(raw_path: str) -> str:
     expanded = os.path.expanduser(str(raw_path).strip())
     resolved = os.path.realpath(expanded)
 
-    if _is_sensitive_path(resolved):
+    # Check both the user-visible path and the symlink-resolved target. A
+    # sensitive filename such as ~/.bashrc may itself be a symlink; checking
+    # only realpath() loses that protected basename.
+    if _is_sensitive_path(os.path.abspath(expanded)) or _is_sensitive_path(resolved):
         raise ValueError(
             f"path '{raw_path}' is inside a sensitive directory "
             f"(e.g. .ssh, .gnupg) or matches a sensitive filename"
@@ -209,7 +212,7 @@ def _resolve_tool_path_in_workspace(workspace: str, raw_path: str) -> str:
     expanded = os.path.expanduser(str(raw_path).strip())
     candidate = expanded if os.path.isabs(expanded) else os.path.join(base, expanded)
     resolved = os.path.realpath(candidate)
-    if _is_sensitive_path(resolved):
+    if _is_sensitive_path(os.path.abspath(candidate)) or _is_sensitive_path(resolved):
         raise ValueError(
             f"path '{raw_path}' is inside a sensitive directory "
             f"(e.g. .ssh, .gnupg) or matches a sensitive filename"
