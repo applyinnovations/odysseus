@@ -471,6 +471,22 @@ Odysseus serves plain HTTP on its app port. Docker Compose binds Odysseus and th
 Cloudflare Access, Tailscale, Caddy, nginx, and Traefik can all fit this pattern; none are required by Odysseus. If your access layer reaches Odysseus on the same host, proxy to `http://127.0.0.1:7000` and keep `AUTH_ENABLED=true`, `LOCALHOST_BYPASS=false`, and `SECURE_COOKIES=true`.
 `ALLOWED_ORIGINS` lists exact permitted origins for cross-origin browser/API clients; ordinary same-origin reverse-proxy access usually does not need a special CORS entry.
 
+### Trusted proxy authentication
+
+Odysseus can use an identity-aware proxy instead of its local sign-in page.
+Set `TRUSTED_PROXY_AUTH_ENABLED=true`, configure the allowed domains and admin
+emails, and give both the proxy and Odysseus the same high-entropy
+`TRUSTED_PROXY_AUTH_SHARED_SECRET`. The proxy must overwrite (not append to)
+`X-Auth-Request-Email` and `X-Odysseus-Proxy-Secret`; untrusted client values
+must never reach the app. Restrict network access so the application port is
+reachable only from that proxy. Users are provisioned on first request, and
+emails listed in `TRUSTED_PROXY_AUTH_ADMIN_EMAILS` are promoted to admin.
+
+Health/version probes, static assets, and path-token task webhooks do not
+require the proxy headers. All other browser and API routes fail closed when a
+trusted assertion is missing or invalid. `TRUSTED_PROXY_AUTH_LOGOUT_URL` should
+point to the proxy's logout endpoint (for example `/oauth2/sign_out`).
+
 Common internal-only ports from the default docs/compose setup:
 
 | Port | Service |
@@ -502,6 +518,13 @@ Key settings:
 | `LOCALHOST_BYPASS` | `false` | Development-only auth bypass for loopback requests. Keep false for shared/network deployments. |
 | `ALLOWED_ORIGINS` | `http://localhost,http://127.0.0.1` | Comma-separated exact permitted origins for cross-origin browser/API clients. |
 | `SECURE_COOKIES` | `false` | Set true when serving Odysseus through HTTPS at a trusted proxy or private access gateway. |
+| `TRUSTED_PROXY_AUTH_ENABLED` | `false` | Trust proxy-asserted identities after shared-secret and allowed-domain validation. Requires `AUTH_ENABLED=true`. |
+| `TRUSTED_PROXY_AUTH_IDENTITY_HEADER` | `X-Auth-Request-Email` | Header containing the authenticated email address. The proxy must overwrite it. |
+| `TRUSTED_PROXY_AUTH_SECRET_HEADER` | `X-Odysseus-Proxy-Secret` | Header containing the shared secret. The proxy must overwrite it. |
+| `TRUSTED_PROXY_AUTH_SHARED_SECRET` | -- | High-entropy secret shared only by Odysseus and the trusted proxy. |
+| `TRUSTED_PROXY_AUTH_ALLOWED_DOMAINS` | -- | Comma-separated email-domain allowlist. |
+| `TRUSTED_PROXY_AUTH_ADMIN_EMAILS` | -- | Comma-separated proxy identities that are promoted to Odysseus admins. |
+| `TRUSTED_PROXY_AUTH_LOGOUT_URL` | `/login` | URL used after clearing client state; set to the identity proxy's logout endpoint. |
 | `DATABASE_URL` | `sqlite:///./data/app.db` | Database connection string |
 | `CHROMADB_HOST` | `localhost` | ChromaDB host for vector memory. Docker overrides this to `chromadb`. |
 | `CHROMADB_PORT` | `8100` | ChromaDB port for manual host runs. Docker overrides this to `8000`. |

@@ -92,6 +92,9 @@ def setup_auth_routes(auth_manager: AuthManager) -> APIRouter:
     _setup_limiter = RateLimiter(max_requests=3, window_seconds=300)
 
     def _get_current_user(request: Request) -> Optional[str]:
+        state_user = getattr(getattr(request, "state", None), "current_user", None)
+        if state_user:
+            return state_user
         token = request.cookies.get(SESSION_COOKIE)
         return auth_manager.get_username_for_token(token)
 
@@ -167,6 +170,14 @@ def setup_auth_routes(auth_manager: AuthManager) -> APIRouter:
 
     @router.post("/logout")
     async def logout(request: Request, response: Response):
+        proxy_auth = getattr(
+            getattr(getattr(request, "app", None), "state", None),
+            "trusted_proxy_auth",
+            None,
+        )
+        if proxy_auth and proxy_auth.enabled:
+            response.delete_cookie(SESSION_COOKIE, path="/")
+            return {"ok": True, "logout_url": proxy_auth.logout_url}
         token = request.cookies.get(SESSION_COOKIE)
         if token:
             auth_manager.revoke_token(token)
@@ -175,8 +186,24 @@ def setup_auth_routes(auth_manager: AuthManager) -> APIRouter:
 
     @router.get("/status")
     async def auth_status(request: Request):
-        token = request.cookies.get(SESSION_COOKIE)
-        result = auth_manager.status(token)
+        proxy_auth = getattr(
+            getattr(getattr(request, "app", None), "state", None),
+            "trusted_proxy_auth",
+            None,
+        )
+        proxy_user = getattr(getattr(request, "state", None), "current_user", None)
+        if proxy_auth and proxy_auth.enabled and proxy_user:
+            result = {
+                "configured": auth_manager.is_configured,
+                "authenticated": True,
+                "username": proxy_user,
+                "is_admin": auth_manager.is_admin(proxy_user),
+                "auth_source": "trusted_proxy",
+                "logout_url": proxy_auth.logout_url,
+            }
+        else:
+            token = request.cookies.get(SESSION_COOKIE)
+            result = auth_manager.status(token)
         result["signup_enabled"] = auth_manager.signup_enabled
         # Include the caller's effective privileges so the frontend can
         # hide / dim UI controls the user isn't allowed to use. Admins get

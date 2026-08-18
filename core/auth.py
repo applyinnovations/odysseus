@@ -289,6 +289,51 @@ class AuthManager:
         logger.info(f"Created user '{username}' (admin={is_admin})")
         return True
 
+    def ensure_trusted_proxy_user(self, username: str, is_admin: bool = False) -> bool:
+        """Provision an externally-authenticated user if it does not exist.
+
+        Trusted-proxy users never use the generated local password.  The random
+        hash simply preserves the existing user-record shape.  A configured
+        proxy admin is promoted deterministically, including when an older
+        non-admin record already exists; this method intentionally never demotes
+        existing admins.
+        """
+        username = (username or "").strip().lower()
+        if not username or username in RESERVED_USERNAMES:
+            return False
+
+        created = False
+        promoted = False
+        with self._config_lock:
+            users = self._config.setdefault("users", {})
+            user = users.get(username)
+            if user is None:
+                user = {
+                    "password_hash": _hash_password(secrets.token_urlsafe(48)),
+                    "created": time.time(),
+                    "is_admin": bool(is_admin),
+                    "privileges": dict(ADMIN_PRIVILEGES if is_admin else DEFAULT_PRIVILEGES),
+                    "auth_source": "trusted_proxy",
+                }
+                users[username] = user
+                created = True
+            elif is_admin and not user.get("is_admin"):
+                user["privileges_before_admin"] = dict(
+                    user.get("privileges") or DEFAULT_PRIVILEGES
+                )
+                user["is_admin"] = True
+                user["privileges"] = dict(ADMIN_PRIVILEGES)
+                promoted = True
+
+            if created or promoted:
+                self._save()
+
+        if created:
+            logger.info("Provisioned trusted proxy user '%s' (admin=%s)", username, bool(is_admin))
+        elif promoted:
+            logger.info("Promoted configured trusted proxy admin '%s'", username)
+        return True
+
     def delete_user(self, username: str, requesting_user: str) -> bool:
         """Delete a user. Only admins can delete, and can't delete themselves.
 

@@ -23,6 +23,7 @@ secrets.env~
 /data/
 /logs/
 .git/
+.tekton/
 .claude/
 .playwright-mcp/
 .pytest_cache/

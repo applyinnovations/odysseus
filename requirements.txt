@@ -38,7 +38,9 @@ python-dateutil
 caldav
 cryptography
 bcrypt
-mcp
+# The bundled MCP servers use the 1.x Server decorator API. MCP 2.0 removed
+# Server.list_tools()/call_tool(), so an unconstrained install breaks imports.
+mcp>=1.29,<2
 pyotp
 qrcode[pil]
 croniter
