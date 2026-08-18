@@ -123,6 +123,9 @@ spec:
               script: |
                 #!/bin/sh
                 set -eu
+                apt-get update
+                apt-get install -y --no-install-recommends git nodejs
+                rm -rf /var/lib/apt/lists/*
                 python -m pip install --disable-pip-version-check --no-cache-dir -r requirements.txt
                 python -m pytest -q
         workspaces:
