@@ -21,6 +21,13 @@ spec:
       securityContext:
         fsGroup: 1000
         fsGroupChangePolicy: OnRootMismatch
+  taskRunSpecs:
+    # The regular BuildKit image is privileged only inside this Kubernetes-
+    # managed user namespace; its UID and capabilities are unprivileged on the
+    # host. The platform admission policy rejects this Task without the setting.
+    - pipelineTaskName: build-and-push
+      podTemplate:
+        hostUsers: false
   timeouts:
     pipeline: 75m0s
   params:
